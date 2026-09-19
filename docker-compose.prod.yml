@@ -1,0 +1,42 @@
+# ============================================================
+# Backend MDLD — surcouche de production
+# Usage : docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Différences avec le développement :
+#   - la base n'est PAS exposée sur l'hôte (aucun port publié) ;
+#   - l'API n'écoute que sur 127.0.0.1, derrière Nginx ;
+#   - limites mémoire et rotation des logs resserrées.
+# ============================================================
+
+services:
+  base:
+    # Aucun port publié : la base n'est joignable que par le réseau interne.
+    # Un `ports:` oublié ici expose PostgreSQL à Internet.
+    ports: !reset []
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+
+  api:
+    restart: always
+    environment:
+      NODE_ENV: production
+    ports:
+      - '127.0.0.1:4000:4000'
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+        reservations:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '10'

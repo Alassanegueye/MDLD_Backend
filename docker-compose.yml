@@ -1,0 +1,77 @@
+# ============================================================
+# Backend MDLD — pile de développement
+# Lancement : docker compose up -d --build
+# La base est exposée sur 5433 pour ne pas entrer en conflit avec
+# un PostgreSQL déjà installé sur la machine.
+# ============================================================
+
+services:
+  base:
+    image: postgres:16-alpine
+    container_name: mdld_base
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-mdld}
+      POSTGRES_USER: ${DB_USER:-mdld}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-mdld}
+    ports:
+      - '127.0.0.1:5433:5432'
+    volumes:
+      - donnees_postgres:/var/lib/postgresql/data
+    healthcheck:
+      # L'API attend ce healthcheck : démarrer avant que Postgres accepte
+      # les connexions produit un crash au boot à chaque `up`.
+      test: ['CMD-SHELL', 'pg_isready -U ${DB_USER:-mdld} -d ${DB_NAME:-mdld}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [mdld]
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mdld_api
+    restart: unless-stopped
+    depends_on:
+      base:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 4000
+      API_PREFIX: ${API_PREFIX:-/mdld/v1}
+      DB_HOST: base
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-mdld}
+      DB_USER: ${DB_USER:-mdld}
+      DB_PASSWORD: ${DB_PASSWORD:-mdld}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_RESET_SECRET: ${JWT_RESET_SECRET}
+      BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      # Publié sur la boucle locale uniquement : en production, c'est le
+      # reverse proxy qui expose le service, jamais le conteneur.
+      - '127.0.0.1:4000:4000'
+    volumes:
+      - journaux_api:/app/logs
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '5'
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks: [mdld]
+
+volumes:
+  donnees_postgres:
+  journaux_api:
+
+networks:
+  mdld:
+    driver: bridge

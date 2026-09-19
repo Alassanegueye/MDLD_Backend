@@ -1,0 +1,10 @@
+node_modules/
+logs/
+*.log
+coverage/
+.DS_Store
+
+# Secrets : seul .env.example est versionne
+.env
+.env.*
+!.env.example

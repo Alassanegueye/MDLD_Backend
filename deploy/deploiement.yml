@@ -1,0 +1,84 @@
+# ============================================================
+# CI/CD — déploiement de l'API MDLD
+# À copier dans .github/workflows/ à la racine du dépôt.
+#
+# Enchaînement imposé : tests -> build -> MIGRATIONS -> health check.
+# Le job échoue si /health ne répond pas : un déploiement « vert » avec
+# une API cassée est pire qu'un déploiement en échec.
+# ============================================================
+name: Déploiement API MDLD
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Backend_MDLD/**'
+  workflow_dispatch:
+
+jobs:
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Backend_MDLD
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: Backend_MDLD/package-lock.json
+      - run: npm ci
+      # La suite tourne sur SQLite en mémoire : pas de service Postgres
+      # à provisionner pour la CI.
+      - run: npm test
+
+  deploiement:
+    name: Déploiement
+    needs: tests
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Connexion au serveur et mise à jour
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -euo pipefail
+            cd /opt/mdld
+
+            echo "→ Récupération du code"
+            git pull --ff-only origin main
+
+            cd Backend_MDLD
+
+            echo "→ Construction de l'image"
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml build api
+
+            echo "→ Démarrage"
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+            echo "→ Migrations de base de données"
+            # Exécutées depuis un conteneur jetable qui embarque les
+            # devDependencies : l'image de production ne contient pas la CLI.
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+              run --rm --entrypoint sh api -c "npm ci && npm run migrate"
+
+            echo "→ Vérification de santé"
+            # 10 tentatives espacées de 3 s : le conteneur peut mettre
+            # quelques secondes à ouvrir sa connexion à la base.
+            for i in $(seq 1 10); do
+              if curl -fsS http://127.0.0.1:4000/health > /dev/null; then
+                echo "API en bonne santé"
+                exit 0
+              fi
+              echo "  tentative $i/10…"
+              sleep 3
+            done
+
+            echo "ÉCHEC : /health ne répond pas, retour arrière conseillé" >&2
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml logs --tail=50 api
+            exit 1

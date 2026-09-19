@@ -1,0 +1,331 @@
+openapi: 3.0.3
+info:
+  title: API Mosquée de la Divinité
+  version: 1.0.0
+  description: |
+    API de la boutique patrimoine et de l'administration.
+
+    Deux familles d'endpoints :
+      * `/boutique/**` — ouvert, consommé par le site vitrine ;
+      * `/admin/**` — jeton Bearer obligatoire, consommé par le dashboard.
+
+    Format de réponse constant :
+      succès `{ success: true, message, data }`
+      échec  `{ success: false, message, details? }`
+
+servers:
+  - url: http://localhost:4000/mdld/v1
+    description: Développement
+  - url: https://api.mosqueedeladivinite.org/mdld/v1
+    description: Production
+
+tags:
+  - name: Boutique
+    description: Catalogue et commandes (public)
+  - name: Authentification
+    description: Connexion du dashboard
+  - name: Administration
+    description: Gestion du catalogue et des commandes
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    Reponse:
+      type: object
+      properties:
+        success: { type: boolean }
+        message: { type: string }
+        data: {}
+
+    Erreur:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        message: { type: string }
+        details:
+          type: array
+          items:
+            type: object
+            properties:
+              champ: { type: string }
+              message: { type: string }
+
+    Produit:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reference: { type: string, example: MDLD-HOO-001 }
+        nom: { type: string, example: Hoodie · Héritage }
+        slug: { type: string, example: hoodie-heritage }
+        description: { type: string }
+        # Entier en FCFA : le franc CFA n'a pas de centimes
+        prix: { type: integer, example: 25000 }
+        devise: { type: string, example: FCFA }
+        stock: { type: integer, nullable: true, description: null = illimité }
+        surCommande: { type: boolean }
+        actif: { type: boolean }
+
+    ArticlePanier:
+      type: object
+      required: [produitId, quantite]
+      properties:
+        produitId: { type: string, format: uuid }
+        quantite: { type: integer, minimum: 1, maximum: 99 }
+
+    NouvelleCommande:
+      type: object
+      required: [prenom, nom, email, telephone, articles]
+      properties:
+        prenom: { type: string, example: Fatou }
+        nom: { type: string, example: Ndiaye }
+        email: { type: string, format: email }
+        telephone: { type: string, example: '+221 77 555 44 33' }
+        modeLivraison:
+          type: string
+          enum: [retrait, livraison]
+          default: retrait
+        adresse: { type: string, description: Obligatoire si modeLivraison = livraison }
+        ville: { type: string, description: Obligatoire si modeLivraison = livraison }
+        quartier: { type: string }
+        note: { type: string }
+        articles:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ArticlePanier' }
+
+    Commande:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        reference: { type: string, example: MDLD-9F3K2A }
+        prenom: { type: string }
+        nom: { type: string }
+        email: { type: string }
+        telephone: { type: string }
+        modeLivraison: { type: string, enum: [retrait, livraison] }
+        sousTotal: { type: integer }
+        fraisLivraison: { type: integer }
+        total: { type: integer, description: Recalculé côté serveur, jamais fourni par le client }
+        statut:
+          type: string
+          enum: [en_attente, confirmee, prete, livree, annulee]
+        lignes:
+          type: array
+          items:
+            type: object
+            properties:
+              nomProduit: { type: string }
+              prixUnitaire: { type: integer }
+              quantite: { type: integer }
+              sousTotal: { type: integer }
+
+paths:
+  /boutique/produits:
+    get:
+      tags: [Boutique]
+      summary: Catalogue public (articles actifs uniquement)
+      parameters:
+        - { in: query, name: page, schema: { type: integer, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 100 } }
+        - { in: query, name: categorie, schema: { type: string }, description: slug de gamme }
+        - { in: query, name: vedette, schema: { type: boolean } }
+        - { in: query, name: recherche, schema: { type: string } }
+      responses:
+        '200': { description: Liste paginée }
+
+  /boutique/produits/{slug}:
+    get:
+      tags: [Boutique]
+      summary: Fiche produit
+      parameters:
+        - { in: path, name: slug, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Produit }
+        '404': { description: Introuvable }
+
+  /boutique/categories:
+    get:
+      tags: [Boutique]
+      summary: Gammes actives
+      responses:
+        '200': { description: Liste des gammes }
+
+  /boutique/commandes:
+    post:
+      tags: [Boutique]
+      summary: Enregistrer une commande
+      description: |
+        Le client n'envoie que des identifiants de produits et des quantités.
+        Prix, sous-totaux et total sont relus dans le catalogue et recalculés
+        par le serveur — un total transmis par le navigateur est ignoré.
+        Quota : 10 commandes par heure et par adresse IP.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NouvelleCommande' }
+      responses:
+        '201':
+          description: Commande créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Commande' }
+        '409': { description: Stock insuffisant }
+        '422':
+          description: Données invalides
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Erreur' }
+        '429': { description: Trop de commandes depuis cette IP }
+
+  /boutique/commandes/suivi:
+    get:
+      tags: [Boutique]
+      summary: Suivi d'une commande
+      description: Référence ET e-mail exigés — une référence devinée ne suffit pas.
+      parameters:
+        - { in: query, name: reference, required: true, schema: { type: string } }
+        - { in: query, name: email, required: true, schema: { type: string, format: email } }
+      responses:
+        '200': { description: Commande trouvée }
+        '404': { description: Aucune correspondance }
+
+  /admin/auth/connexion:
+    post:
+      tags: [Authentification]
+      summary: Connexion
+      description: 5 tentatives par tranche de 15 minutes, par IP et par e-mail visé.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, motDePasse]
+              properties:
+                email: { type: string, format: email }
+                motDePasse: { type: string, minLength: 8 }
+      responses:
+        '200': { description: accessToken + refreshToken + utilisateur }
+        '401': { description: Identifiants incorrects }
+        '403': { description: Compte désactivé }
+        '429': { description: Trop de tentatives }
+
+  /admin/auth/rafraichir:
+    post:
+      tags: [Authentification]
+      summary: Renouveler la session (rotation du refresh token)
+      description: L'ancien jeton est révoqué ; le rejouer échoue.
+      responses:
+        '200': { description: Nouveau couple de jetons }
+        '401': { description: Session révoquée ou expirée }
+
+  /admin/auth/deconnexion:
+    post:
+      tags: [Authentification]
+      summary: Révoquer la session courante ou toutes les sessions
+      responses:
+        '200': { description: Déconnexion effectuée }
+
+  /admin/auth/moi:
+    get:
+      tags: [Authentification]
+      summary: Profil courant
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Utilisateur }
+        '401': { description: Jeton absent ou invalide }
+
+  /admin/produits:
+    get:
+      tags: [Administration]
+      summary: Catalogue complet (actifs et masqués)
+      security: [{ bearerAuth: [] }]
+      description: Permission `produits.lire`.
+      responses:
+        '200': { description: Liste paginée }
+        '403': { description: Permission manquante }
+    post:
+      tags: [Administration]
+      summary: Créer un article
+      security: [{ bearerAuth: [] }]
+      description: Permission `produits.ecrire`.
+      responses:
+        '201': { description: Article créé }
+        '409': { description: Référence déjà utilisée }
+
+  /admin/produits/{id}:
+    patch:
+      tags: [Administration]
+      summary: Modifier un article
+      security: [{ bearerAuth: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Article modifié }
+    delete:
+      tags: [Administration]
+      summary: Retirer un article (suppression douce)
+      security: [{ bearerAuth: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Article retiré }
+
+  /admin/commandes:
+    get:
+      tags: [Administration]
+      summary: Liste des commandes
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { in: query, name: statut, schema: { type: string, enum: [en_attente, confirmee, prete, livree, annulee] } }
+        - { in: query, name: recherche, schema: { type: string } }
+        - { in: query, name: page, schema: { type: integer } }
+        - { in: query, name: limit, schema: { type: integer, maximum: 100 } }
+      responses:
+        '200': { description: Liste paginée }
+
+  /admin/commandes/{id}/statut:
+    patch:
+      tags: [Administration]
+      summary: Changer le statut d'une commande
+      description: |
+        Transitions autorisées uniquement :
+        en_attente → confirmee | annulee ·
+        confirmee → prete | annulee ·
+        prete → livree | annulee.
+        Une annulation restitue le stock.
+      security: [{ bearerAuth: [] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses:
+        '200': { description: Statut modifié }
+        '409': { description: Transition interdite }
+
+  /admin/commandes/statistiques:
+    get:
+      tags: [Administration]
+      summary: Chiffres du tableau de bord
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Totaux par statut, chiffre d'affaires, dernières commandes }
+
+  /admin/journal:
+    get:
+      tags: [Administration]
+      summary: Journal d'audit
+      description: Réservé au rôle `admin`.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200': { description: Liste paginée }
+        '403': { description: Réservé aux administrateurs }
+
+  /health:
+    get:
+      summary: Sonde de santé
+      description: Hors préfixe de version. Vérifie réellement la base ; 503 si elle est injoignable.
+      responses:
+        '200': { description: API et base opérationnelles }
+        '503': { description: Base injoignable }
