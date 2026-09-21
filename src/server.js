@@ -17,21 +17,59 @@ const { demarrerTaches } = require('./jobs')
  */
 let serveur
 
+/**
+ * Compare les migrations présentes sur le disque à celles enregistrées.
+ *
+ * Remplace l'ancien `sync()` : on ne corrige plus le schéma en silence,
+ * on signale l'écart. Un démarrage qui ne prévient de rien alors que la
+ * base est en retard donne des 500 incompréhensibles sur une colonne
+ * manquante, des heures plus tard.
+ */
+async function verifierSchema() {
+  const fs = require('fs/promises')
+  const path = require('path')
+
+  try {
+    const fichiers = (await fs.readdir(path.join(__dirname, 'migrations')))
+      .filter((n) => n.endsWith('.js'))
+      .sort()
+
+    const [lignes] = await sequelize.query('SELECT name FROM "SequelizeMeta"')
+    const appliquees = new Set(lignes.map((l) => l.name))
+    const enRetard = fichiers.filter((n) => !appliquees.has(n))
+
+    if (enRetard.length) {
+      logger.warn(
+        `${enRetard.length} migration(s) non appliquée(s) — lancez « npm run migrate »`,
+        { migrations: enRetard }
+      )
+    } else {
+      logger.info(`Schéma à jour (${fichiers.length} migrations appliquées)`)
+    }
+  } catch (erreur) {
+    // Table SequelizeMeta absente = base jamais migrée. On le dit sans
+    // bloquer : le conteneur doit pouvoir démarrer pour qu'on y lance
+    // justement les migrations.
+    logger.warn('Impossible de vérifier l\'état des migrations', { message: erreur.message })
+  }
+}
+
 async function demarrer() {
   try {
     await sequelize.authenticate()
     logger.info('Connexion à la base de données établie')
 
-    // sync({ alter }) en développement uniquement.
-    // En production on ne synchronise PAS : les migrations font foi. Un
-    // sync qui crée les tables hors migration désynchronise SequelizeMeta,
-    // et le prochain `db:migrate` échoue sur « table déjà existante ».
-    if (securite.env === 'development') {
-      await sequelize.sync({ alter: true })
-      logger.info('Schéma synchronisé (développement)')
-    } else {
-      logger.info('Schéma géré par les migrations (aucune synchronisation automatique)')
-    }
+    // Aucune synchronisation automatique, même en développement : les
+    // migrations font foi partout.
+    //
+    // `sync({ alter: true })` alignait la base sur les modèles du code en
+    // cours d'exécution. Un conteneur démarré sur une image antérieure à
+    // une migration supprimait donc la colonne qu'il ne connaissait pas,
+    // avec son contenu — et la recréait vide au redéploiement suivant.
+    // Des données disparaissaient sans la moindre erreur.
+    await verifierSchema()
+
+    demarrerTaches()
 
     demarrerTaches()
 

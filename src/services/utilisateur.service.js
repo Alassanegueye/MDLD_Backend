@@ -29,6 +29,8 @@ const PERMISSIONS = [
   'produits.lire',
   'produits.ecrire',
   'produits.supprimer',
+  'renovation.lire',
+  'renovation.ecrire',
 ]
 
 async function nombreAdminsActifs(saufId = null) {

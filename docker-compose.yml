@@ -51,12 +51,18 @@ services:
       BCRYPT_ROUNDS: ${BCRYPT_ROUNDS:-12}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:5174}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      UPLOAD_DIR: /app/uploads
     ports:
       # Publié sur la boucle locale uniquement : en production, c'est le
       # reverse proxy qui expose le service, jamais le conteneur.
       - '127.0.0.1:4000:4000'
     volumes:
       - journaux_api:/app/logs
+      # Visuels televerses depuis le dashboard. Montage lie sur le
+      # dossier du depot et non volume nomme : les photos restent
+      # visibles et sauvegardables depuis l hote, et un script lance
+      # en local ecrit au meme endroit que l API.
+      - ./uploads:/app/uploads
     logging:
       driver: json-file
       options:

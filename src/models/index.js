@@ -18,6 +18,11 @@ const Produit = require('./produit.model')
 const Commande = require('./commande.model')
 const LigneCommande = require('./ligneCommande.model')
 const JournalAudit = require('./journalAudit.model')
+const Campagne = require('./campagne.model')
+const Chantier = require('./chantier.model')
+const Responsable = require('./responsable.model')
+const MoyenPaiement = require('./moyenPaiement.model')
+const Don = require('./don.model')
 
 // ---- Sessions ----
 Utilisateur.hasMany(RefreshToken, { foreignKey: 'utilisateurId', as: 'sessions', onDelete: 'CASCADE' })
@@ -39,6 +44,18 @@ LigneCommande.belongsTo(Produit, { foreignKey: 'produitId', as: 'produit' })
 Utilisateur.hasMany(Commande, { foreignKey: 'traiteePar', as: 'commandesTraitees' })
 Commande.belongsTo(Utilisateur, { foreignKey: 'traiteePar', as: 'gestionnaire' })
 
+// ---- Rénovation ----
+// Aucune association : campagne, chantiers, responsables et moyens de
+// paiement sont quatre listes indépendantes rendues sur la même page.
+// Une clé étrangère vers la campagne n'apporterait rien tant qu'il n'y
+// en a qu'une, et compliquerait chaque requête publique.
+
+// ---- Dons ----
+// SET NULL : supprimer un chantier ne doit pas effacer les versements
+// deja recus, ils restent acquis au fonds global.
+Chantier.hasMany(Don, { foreignKey: 'chantierId', as: 'dons', onDelete: 'SET NULL' })
+Don.belongsTo(Chantier, { foreignKey: 'chantierId', as: 'chantier' })
+
 // ---- Audit ----
 Utilisateur.hasMany(JournalAudit, { foreignKey: 'utilisateurId', as: 'actions' })
 JournalAudit.belongsTo(Utilisateur, { foreignKey: 'utilisateurId', as: 'utilisateur' })
@@ -52,4 +69,9 @@ module.exports = {
   Commande,
   LigneCommande,
   JournalAudit,
+  Campagne,
+  Chantier,
+  Responsable,
+  MoyenPaiement,
+  Don,
 }

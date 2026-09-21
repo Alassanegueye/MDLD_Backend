@@ -11,6 +11,7 @@ const logger = require('./utils/logger')
 const { verifierConnexion } = require('./config/db')
 const routes = require('./routes')
 const errorHandler = require('./middlewares/errorHandler.middleware')
+const mediaService = require('./services/media.service')
 const { limiteGlobale } = require('./middlewares/rateLimit.middleware')
 const { fail } = require('./utils/response')
 
@@ -80,6 +81,22 @@ app.get('/health', async (req, res) => {
     return res.status(503).json({ success: false, status: 'degrade', base: 'injoignable' })
   }
 })
+
+// ---- Visuels téléversés ----
+// Servis en statique depuis le disque : les faire transiter par un
+// contrôleur Express ferait passer chaque photo par le fil du process
+// Node au lieu du sendfile du noyau, pour aucun gain.
+// immutable : le nom de fichier est un UUID, un contenu ne change jamais
+// de nom, donc le navigateur peut le garder sans revalidation.
+app.use(
+  mediaService.PREFIXE_PUBLIC,
+  express.static(mediaService.DOSSIER, {
+    maxAge: '30d',
+    immutable: true,
+    index: false,
+    dotfiles: 'deny',
+  })
+)
 
 // ---- API versionnée ----
 app.use(securite.prefixeApi, routes)
